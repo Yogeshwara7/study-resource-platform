@@ -442,3 +442,66 @@ function esc(str) {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 initSupabase();
+
+// ─── Driver.js Tour ───────────────────────────────────────────────────────────
+function startTour() {
+  const driver = window.driver.js.driver;
+  
+  const driverObj = driver({
+    showProgress: true,
+    steps: [
+      {
+        element: '#tour-logo',
+        popover: {
+          title: 'Welcome to StudyHub',
+          description: 'Your platform for sharing and accessing study materials. Let me show you around!',
+          side: "bottom",
+          align: 'start'
+        }
+      },
+      {
+        element: '#tour-browse',
+        popover: {
+          title: 'Browse Resources',
+          description: 'Explore thousands of study materials shared by students worldwide.',
+          side: "bottom",
+          align: 'start'
+        }
+      },
+      {
+        element: '#tour-signup',
+        popover: {
+          title: 'Create an Account',
+          description: 'Sign up to upload your own materials and help other students.',
+          side: "bottom",
+          align: 'end'
+        }
+      },
+      {
+        element: '#tour-browse-btn',
+        popover: {
+          title: 'Start Exploring',
+          description: 'Click here to browse all available resources.',
+          side: "top",
+          align: 'center'
+        }
+      },
+      {
+        popover: {
+          title: 'Ready to Go!',
+          description: 'You\'re all set! Click the Help button anytime to see this tour again.',
+        }
+      }
+    ]
+  });
+
+  driverObj.drive();
+}
+
+// Auto-start tour for first-time visitors
+if (!localStorage.getItem('studyhub-tour-completed')) {
+  setTimeout(() => {
+    startTour();
+    localStorage.setItem('studyhub-tour-completed', 'true');
+  }, 1000);
+}
