@@ -1,23 +1,75 @@
-const SUPABASE_URL = 'https://gzlgufleaukelahqwofx.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd6bGd1ZmxlYXVrZWxhaHF3b2Z4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0NjQ4MTgsImV4cCI6MjA5MzA0MDgxOH0.eQTq-kLKV7E9XYTOVZMosZuG41Gfgq5sJD8sZUaE778';
-const ADMIN_API    = ''; // same origin — works locally and on Render
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let SUPABASE_URL = '';
+let SUPABASE_KEY = '';
+const ADMIN_API = ''; // same origin — works locally and on Render
+let sb = null;
 
 let currentUser = null;
+
+// ─── Initialize Supabase ──────────────────────────────────────────────────────
+async function initSupabase() {
+  try {
+    const res = await fetch('/api/config');
+    const config = await res.json();
+    SUPABASE_URL = config.supabaseUrl;
+    SUPABASE_KEY = config.supabaseKey;
+    sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    
+    // Check session
+    const { data } = await sb.auth.getSession();
+    if (data.session) {
+      currentUser = data.session.user;
+    }
+    updateNav();
+    loadStats();
+    
+    // Listen to auth changes
+    sb.auth.onAuthStateChange((event, session) => {
+      currentUser = session?.user || null;
+      updateNav();
+      if (event === 'SIGNED_IN') {
+        showPage('home');
+      }
+    });
+  } catch (err) {
+    console.error('Failed to initialize:', err);
+  }
+}
 
 // ─── Nav ──────────────────────────────────────────────────────────────────────
 function updateNav() {
   const u = currentUser;
-  document.getElementById('loginLink').style.display  = u ? 'none' : '';
-  document.getElementById('regLink').style.display    = u ? 'none' : '';
-  document.getElementById('logoutLink').style.display = u ? '' : 'none';
-  document.getElementById('uploadLink').style.display = u ? '' : 'none';
-  document.getElementById('adminLink').style.display  = (u?.user_metadata?.role === 'admin') ? '' : 'none';
+  
+  // Update header navigation
+  document.getElementById('uploadNav').style.display = u ? 'inline-block' : 'none';
+  document.getElementById('adminNav').style.display = (u?.user_metadata?.role === 'admin') ? 'inline-block' : 'none';
+  
+  // Update header sections
+  document.getElementById('userSection').style.display = u ? 'flex' : 'none';
+  document.getElementById('authSection').style.display = u ? 'none' : 'flex';
+  
+  // Update user info
+  if (u) {
+    document.getElementById('userName').textContent = u.user_metadata?.full_name || u.email;
+  }
+  
+  // Update active nav link
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('active');
+  });
 }
 
 function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById(`page-${name}`).classList.add('active');
+  
+  // Update active nav link
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('active');
+    if (link.dataset.page === name) {
+      link.classList.add('active');
+    }
+  });
+  
   if (name === 'browse') loadResources();
   if (name === 'home')   loadStats();
   if (name === 'admin')  adminTab('resources');
@@ -36,25 +88,73 @@ async function register() {
   const email = document.getElementById('reg-email').value.trim();
   const pass  = document.getElementById('reg-password').value;
   const msg   = document.getElementById('reg-msg');
+  const btn   = event.target;
 
-  const { error } = await sb.auth.signUp({
+  if (!name || !email || !pass) return setMsg(msg, 'All fields are required.');
+  
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Loading...';
+
+  const { data, error } = await sb.auth.signUp({
     email, password: pass,
-    options: { data: { full_name: name } }
+    options: { 
+      data: { full_name: name },
+      emailRedirectTo: window.location.origin
+    }
   });
+  
+  btn.disabled = false;
+  btn.textContent = 'Register';
+  
   if (error) return setMsg(msg, error.message);
-  setMsg(msg, 'Account created! Check your email to confirm.', true);
+  
+  // Auto-login after registration (no email verification)
+  currentUser = data.user;
+  updateNav();
+  setMsg(msg, 'Account created! Redirecting...', true);
+  setTimeout(() => showPage('home'), 1000);
 }
 
 async function login() {
   const email = document.getElementById('login-email').value.trim();
   const pass  = document.getElementById('login-password').value;
   const msg   = document.getElementById('login-msg');
+  const btn   = event.target;
+
+  if (!email || !pass) return setMsg(msg, 'Email and password are required.');
+  
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Loading...';
 
   const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+  
+  btn.disabled = false;
+  btn.textContent = 'Login';
+  
   if (error) return setMsg(msg, error.message);
   currentUser = data.user;
   updateNav();
   showPage('home');
+}
+
+async function loginWithGoogle() {
+  const msg = document.getElementById('login-msg');
+  const btn = event.target;
+  
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Loading...';
+  
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin
+    }
+  });
+  
+  btn.disabled = false;
+  btn.textContent = 'Continue with Google';
+  
+  if (error) setMsg(msg, error.message);
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
@@ -73,20 +173,36 @@ async function uploadResource() {
   const linkUrl = document.getElementById('res-link').value.trim();
   const file    = document.getElementById('res-file').files[0];
   const msg     = document.getElementById('upload-msg');
+  const btn     = event.target;
 
   if (!title || !subject) return setMsg(msg, 'Title and subject are required.');
 
   let fileUrl = '';
   if (type !== 'link') {
     if (!file) return setMsg(msg, 'Please select a file.');
+    
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      return setMsg(msg, 'File size must be less than 5MB.');
+    }
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Uploading...';
+    
     const ext  = file.name.split('.').pop();
     const path = `resources/${Date.now()}.${ext}`;
     const { error: upErr } = await sb.storage.from('study-files').upload(path, file);
-    if (upErr) return setMsg(msg, upErr.message);
+    if (upErr) {
+      btn.disabled = false;
+      btn.textContent = 'Upload';
+      return setMsg(msg, upErr.message);
+    }
     const { data: urlData } = sb.storage.from('study-files').getPublicUrl(path);
     fileUrl = urlData.publicUrl;
   } else {
     if (!linkUrl) return setMsg(msg, 'Please enter a link URL.');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Uploading...';
   }
 
   const { error } = await sb.from('resources').insert({
@@ -97,27 +213,60 @@ async function uploadResource() {
     uploader_name: currentUser.user_metadata?.full_name || currentUser.email
   });
 
+  btn.disabled = false;
+  btn.textContent = 'Upload';
+
   if (error) return setMsg(msg, error.message);
   setMsg(msg, 'Resource uploaded!', true);
+  
+  // Clear form
+  document.getElementById('res-title').value = '';
+  document.getElementById('res-desc').value = '';
+  document.getElementById('res-subject').value = '';
+  document.getElementById('res-link').value = '';
+  document.getElementById('res-file').value = '';
+  
   setTimeout(() => showPage('browse'), 1200);
 }
 
 // ─── Browse ───────────────────────────────────────────────────────────────────
-async function loadResources() {
+let currentPage = 1;
+const itemsPerPage = 12;
+
+async function loadResources(page = 1) {
+  currentPage = page;
   const keyword = document.getElementById('search-keyword').value.trim();
   const subject = document.getElementById('filter-subject').value.trim();
   const type    = document.getElementById('filter-type').value;
   const grid    = document.getElementById('resources-grid');
+  const pagination = document.getElementById('pagination');
+  
   grid.innerHTML = '<p style="color:#888">Loading...</p>';
+  pagination.innerHTML = '';
 
-  let query = sb.from('resources').select('*').order('created_at', { ascending: false });
+  let query = sb.from('resources').select('*', { count: 'exact' }).order('created_at', { ascending: false });
   if (type)    query = query.eq('type', type);
   if (subject) query = query.ilike('subject', `%${subject}%`);
   if (keyword) query = query.or(`title.ilike.%${keyword}%,description.ilike.%${keyword}%,subject.ilike.%${keyword}%`);
 
-  const { data, error } = await query;
-  if (error || !data?.length) { grid.innerHTML = '<p style="color:#888">No resources found.</p>'; return; }
+  const { data, error, count } = await query.range((page - 1) * itemsPerPage, page * itemsPerPage - 1);
+  
+  if (error || !data?.length) { 
+    grid.innerHTML = '<p style="color:#888">No resources found.</p>'; 
+    return; 
+  }
+  
   grid.innerHTML = data.map(resourceCard).join('');
+  
+  // Pagination
+  const totalPages = Math.ceil(count / itemsPerPage);
+  if (totalPages > 1) {
+    pagination.innerHTML = `
+      <button onclick="loadResources(${page - 1})" ${page === 1 ? 'disabled' : ''}>Previous</button>
+      <span>Page ${page} of ${totalPages}</span>
+      <button onclick="loadResources(${page + 1})" ${page === totalPages ? 'disabled' : ''}>Next</button>
+    `;
+  }
 }
 
 function typeIcon(type) {
@@ -129,23 +278,26 @@ function resourceCard(r) {
   const isAdmin = currentUser?.user_metadata?.role === 'admin';
 
   const actionBtn = r.type === 'link'
-    ? `<a class="btn-download" href="${r.link_url}" target="_blank" rel="noopener">Open Link</a>`
-    : `<a class="btn-download" href="${r.file_url}" target="_blank" onclick="trackDownload('${r.id}')">Download</a>`;
+    ? `<a class="btn btn-primary" href="${r.link_url}" target="_blank" rel="noopener">Open Link</a>`
+    : `<a class="btn btn-primary" href="${r.file_url}" target="_blank" onclick="trackDownload('${r.id}')">Download</a>`;
 
   const deleteBtn = (isOwner || isAdmin)
-    ? `<button class="btn-delete" onclick="deleteResource('${r.id}')">Delete</button>`
+    ? `<button class="btn btn-danger" onclick="deleteResource('${r.id}')">Delete</button>`
     : '';
 
   return `
-    <div class="resource-card">
-      <div class="icon">${typeIcon(r.type)}</div>
-      <span class="badge ${r.type}">${r.type}</span>
-      <h3>${esc(r.title)}</h3>
-      <p>${esc(r.description || '')}</p>
-      <p><strong>Subject:</strong> ${esc(r.subject)}</p>
-      <p class="meta">By ${esc(r.uploader_name)} | ${r.downloads} downloads</p>
-      <p class="meta">${new Date(r.created_at).toLocaleDateString()}</p>
-      <div class="card-actions">
+    <div class="resource">
+      <div class="resource-header">
+        <span class="resource-type">${r.type}</span>
+      </div>
+      <h3 class="resource-title">${esc(r.title)}</h3>
+      <p class="resource-desc">${esc(r.description || 'No description provided')}</p>
+      <div class="resource-meta">
+        <div>Subject: ${esc(r.subject)}</div>
+        <div>By ${esc(r.uploader_name)} • ${r.downloads} downloads</div>
+        <div>${new Date(r.created_at).toLocaleDateString()}</div>
+      </div>
+      <div class="resource-actions">
         ${actionBtn}
         ${deleteBtn}
       </div>
@@ -159,8 +311,15 @@ async function trackDownload(id) {
 
 async function deleteResource(id) {
   if (!confirm('Delete this resource?')) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  
   await sb.from('resources').delete().eq('id', id);
-  loadResources();
+  
+  btn.disabled = false;
+  btn.textContent = 'Delete';
+  loadResources(currentPage);
 }
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
@@ -172,27 +331,47 @@ async function loadStats() {
   const links   = data.filter(r => r.type === 'link').length;
   const total   = data.reduce((s, r) => s + (r.downloads || 0), 0);
   document.getElementById('homeStats').innerHTML = `
-    <div class="stat-card"><div class="num">${pdfs}</div><div class="label">PDFs</div></div>
-    <div class="stat-card"><div class="num">${notes}</div><div class="label">Notes</div></div>
-    <div class="stat-card"><div class="num">${links}</div><div class="label">Links</div></div>
-    <div class="stat-card"><div class="num">${total}</div><div class="label">Downloads</div></div>
+    <div class="stat">
+      <div class="stat-value">${pdfs}</div>
+      <div class="stat-label">PDFs</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">${notes}</div>
+      <div class="stat-label">Notes</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">${links}</div>
+      <div class="stat-label">Links</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">${total}</div>
+      <div class="stat-label">Total Downloads</div>
+    </div>
   `;
 }
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
 async function adminTab(tab) {
   const content = document.getElementById('admin-content');
-  content.innerHTML = '<p style="color:#aaa">Loading...</p>';
+  content.innerHTML = '<p style="color:#888;padding:20px">Loading...</p>';
   const { data: { session } } = await sb.auth.getSession();
   const token = session?.access_token;
+
+  // Update tab buttons
+  document.querySelectorAll('.tab').forEach(btn => {
+    btn.classList.remove('active');
+    if (btn.textContent.toLowerCase() === tab) {
+      btn.classList.add('active');
+    }
+  });
 
   if (tab === 'users') {
     const res  = await fetch(`${ADMIN_API}/admin/users`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const data = await res.json();
-    if (!res.ok) { content.innerHTML = `<p style="color:red">${data.error}</p>`; return; }
-    content.innerHTML = `<table class="admin-table">
+    if (!res.ok) { content.innerHTML = `<p style="color:#f85149;padding:20px">${data.error}</p>`; return; }
+    content.innerHTML = `<table class="table">
       <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Joined</th><th>Action</th></tr></thead>
       <tbody>${data.map(u => `
         <tr>
@@ -200,7 +379,7 @@ async function adminTab(tab) {
           <td>${esc(u.email)}</td>
           <td>${esc(u.role)}</td>
           <td>${new Date(u.created_at).toLocaleDateString()}</td>
-          <td><button onclick="adminDeleteUser('${u.id}')">Delete</button></td>
+          <td><button class="btn btn-danger" onclick="adminDeleteUser('${u.id}')">Delete</button></td>
         </tr>`).join('')}
       </tbody></table>`;
     return;
@@ -208,13 +387,13 @@ async function adminTab(tab) {
 
   if (tab === 'resources') {
     const { data } = await sb.from('resources').select('*').order('created_at', { ascending: false });
-    content.innerHTML = `<table class="admin-table">
+    content.innerHTML = `<table class="table">
       <thead><tr><th>Title</th><th>Subject</th><th>Type</th><th>Uploaded By</th><th>Downloads</th><th>Action</th></tr></thead>
       <tbody>${(data||[]).map(r => `
         <tr>
           <td>${esc(r.title)}</td><td>${esc(r.subject)}</td><td>${r.type}</td>
           <td>${esc(r.uploader_name)}</td><td>${r.downloads}</td>
-          <td><button onclick="adminDeleteResource('${r.id}')">Delete</button></td>
+          <td><button class="btn btn-danger" onclick="adminDeleteResource('${r.id}')">Delete</button></td>
         </tr>`).join('')}
       </tbody></table>`;
   }
@@ -222,38 +401,44 @@ async function adminTab(tab) {
 
 async function adminDeleteUser(id) {
   if (!confirm('Delete this user and all their data?')) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(`${ADMIN_API}/admin/users/${id}`, {
     method: 'DELETE',
     headers: { 'Authorization': `Bearer ${session?.access_token}` }
   });
+  
+  btn.disabled = false;
+  btn.textContent = 'Delete';
+  
   if (res.ok) adminTab('users');
   else alert('Failed to delete user');
 }
 
 async function adminDeleteResource(id) {
   if (!confirm('Delete this resource?')) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  
   await sb.from('resources').delete().eq('id', id);
+  
+  btn.disabled = false;
+  btn.textContent = 'Delete';
   adminTab('resources');
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function setMsg(el, text, success = false) {
   el.textContent = text;
-  el.className = 'msg' + (success ? ' success' : '');
+  el.className = success ? 'form-message success' : 'form-message error';
 }
 function esc(str) {
   return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
-sb.auth.getSession().then(({ data }) => {
-  if (data.session) { currentUser = data.session.user; }
-  updateNav();
-  loadStats();
-});
-
-sb.auth.onAuthStateChange((event, session) => {
-  currentUser = session?.user || null;
-  updateNav();
-});
+initSupabase();

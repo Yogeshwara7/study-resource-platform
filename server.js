@@ -11,6 +11,14 @@ app.use(express.json());
 // Serve frontend
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Serve config endpoint for frontend
+app.get('/api/config', (req, res) => {
+  res.json({
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseKey: process.env.SUPABASE_ANON_KEY
+  });
+});
+
 // Admin Supabase client — uses service key to bypass RLS
 const adminSb = createClient(
   process.env.SUPABASE_URL,

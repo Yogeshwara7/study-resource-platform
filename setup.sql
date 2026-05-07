@@ -19,10 +19,44 @@ CREATE TABLE IF NOT EXISTS resources (
 );
 
 ALTER TABLE resources ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Anyone can view resources"    ON resources FOR SELECT USING (true);
-CREATE POLICY "Auth users can upload"        ON resources FOR INSERT WITH CHECK (auth.uid() = uploaded_by);
-CREATE POLICY "Owner can delete resource"    ON resources FOR DELETE USING (auth.uid() = uploaded_by);
-CREATE POLICY "Anyone can update downloads"  ON resources FOR UPDATE USING (true);
+
+-- SELECT: Anyone can view resources
+CREATE POLICY "Anyone can view resources" 
+  ON resources FOR SELECT 
+  USING (true);
+
+-- INSERT: Authenticated users can upload
+CREATE POLICY "Auth users can upload" 
+  ON resources FOR INSERT 
+  WITH CHECK (auth.uid() = uploaded_by);
+
+-- DELETE: Owner or admin can delete
+CREATE POLICY "Owner or admin can delete" 
+  ON resources FOR DELETE 
+  USING (
+    (auth.uid() = uploaded_by) 
+    OR 
+    ((auth.jwt() -> 'user_metadata' ->> 'role') = 'admin')
+  );
+
+-- UPDATE: Owner or admin can update, or anyone can increment downloads
+CREATE POLICY "Owner or admin can update" 
+  ON resources FOR UPDATE 
+  USING (
+    (auth.uid() = uploaded_by) 
+    OR 
+    ((auth.jwt() -> 'user_metadata' ->> 'role') = 'admin')
+  )
+  WITH CHECK (
+    (auth.uid() = uploaded_by) 
+    OR 
+    ((auth.jwt() -> 'user_metadata' ->> 'role') = 'admin')
+  );
+
+-- Additional policy for download counter (public update for downloads field only)
+CREATE POLICY "Anyone can update downloads counter" 
+  ON resources FOR UPDATE 
+  USING (true);
 
 -- Storage bucket (run manually in Supabase → Storage → New bucket)
 -- Bucket name: study-files | Public: true
